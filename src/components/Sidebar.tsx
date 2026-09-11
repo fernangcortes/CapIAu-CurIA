@@ -116,14 +116,30 @@ export const Sidebar: React.FC<SidebarProps> = ({ filters, onSelectFavorite, onT
     }
   }, [activeTab]);
 
-  const handleSaveKeys = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleKeyChange = (keyName: keyof ApiKeys, value: string) => {
+    const updated = { ...keys, [keyName]: value };
+    setKeys(updated);
+    saveLocalKeys(updated);
+  };
+
+  const handleModelChange = (model: string) => {
+    setOpenRouterModel(model);
+    saveLocalModel(model);
+  };
+
+  const handleProxyChange = (url: string) => {
+    setProxyUrlState(url);
+    saveProxyUrl(url);
+  };
+
+  const handleSaveKeys = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     saveLocalKeys(keys);
     saveProxyUrl(proxyUrl);
     saveLocalModel(openRouterModel);
     setSaveSuccess(true);
     fetchServerStatus(); // Atualiza o status após salvar
-    setTimeout(() => setSaveSuccess(false), 2000);
+    setTimeout(() => setSaveSuccess(false), 2500);
   };
 
   const handleClearHistory = async () => {
@@ -630,10 +646,28 @@ export const Sidebar: React.FC<SidebarProps> = ({ filters, onSelectFavorite, onT
           )}
 
           {activeTab === 'profile' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <h3 style={{ fontSize: '0.95rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Key size={16} /> Configurações de API
-              </h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{ fontSize: '0.95rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
+                  <Key size={16} /> Configurações de API
+                </h3>
+                <span style={{ fontSize: '0.72rem', color: '#4ade80', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <Check size={12} /> Auto-salvo
+                </span>
+              </div>
+
+              <button 
+                type="button" 
+                onClick={() => handleSaveKeys()}
+                className={`btn ${saveSuccess ? 'success' : 'primary'}`} 
+                style={{ width: '100%', justifyContent: 'center', padding: '7px 12px', fontSize: '0.8rem' }}
+              >
+                {saveSuccess ? (
+                  <>
+                    <Check size={14} /> Salvo com Sucesso!
+                  </>
+                ) : 'Salvar Configurações Agora'}
+              </button>
               
               <form onSubmit={handleSaveKeys} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {/* Indicador de provedor ativo */}
@@ -642,16 +676,30 @@ export const Sidebar: React.FC<SidebarProps> = ({ filters, onSelectFavorite, onT
                   const hasOpenRouter = !!keys.openRouter || !!serverStatus?.openRouter;
                   const isActiveGoogleAI = hasGoogleAi && openRouterModel.startsWith('google/gemini');
                   return (
-                    <div style={{ padding: '8px 12px', borderRadius: '4px', backgroundColor: isActiveGoogleAI ? 'rgba(52, 168, 83, 0.1)' : hasOpenRouter ? 'rgba(156, 163, 175, 0.1)' : 'rgba(239, 68, 68, 0.1)', border: `1px solid ${isActiveGoogleAI ? 'rgba(52, 168, 83, 0.3)' : hasOpenRouter ? 'var(--border-subtle)' : 'rgba(239, 68, 68, 0.3)'}`, fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ fontSize: '1rem' }}>{isActiveGoogleAI ? '🚀' : hasOpenRouter ? '🔄' : '❌'}</span>
-                      <span style={{ color: 'var(--text-secondary)' }}>
-                        {isActiveGoogleAI
-                          ? `Rota ativa: Google AI Studio (${keys.googleAi ? 'direto' : 'Servidor .env'}, ~3-8s)`
-                          : hasOpenRouter
-                            ? `Rota ativa: OpenRouter (${keys.openRouter ? 'direto' : 'Servidor .env'}, ~15-40s)`
-                            : 'Nenhuma chave de LLM configurada (nem local nem no .env)'
-                        }
-                      </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <div style={{ padding: '8px 12px', borderRadius: '4px', backgroundColor: isActiveGoogleAI ? 'rgba(52, 168, 83, 0.1)' : hasOpenRouter ? 'rgba(59, 130, 246, 0.1)' : 'rgba(239, 68, 68, 0.1)', border: `1px solid ${isActiveGoogleAI ? 'rgba(52, 168, 83, 0.3)' : hasOpenRouter ? 'rgba(59, 130, 246, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`, fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: '1rem' }}>{isActiveGoogleAI ? '🚀' : hasOpenRouter ? '🔄' : '❌'}</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>
+                          {isActiveGoogleAI
+                            ? `Rota ativa: Google AI Studio (${keys.googleAi ? 'direto' : 'Servidor .env'}, ~3-8s)`
+                            : hasOpenRouter
+                              ? `Rota ativa: OpenRouter (${keys.openRouter ? 'direto' : 'Servidor .env'}, ~15-40s)`
+                              : 'Nenhuma chave de LLM configurada'
+                          }
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px', padding: '0 4px' }}>
+                        <span>Busca Web:</span>
+                        {(keys.serper || serverStatus?.serper) ? (
+                          <span style={{ color: '#4ade80', fontWeight: 500 }}>● Serper.dev (Google Shopping ativo)</span>
+                        ) : (keys.tavily || serverStatus?.tavily) ? (
+                          <span style={{ color: '#4ade80', fontWeight: 500 }}>● Tavily (RAG ativo)</span>
+                        ) : (keys.exa || serverStatus?.exa) ? (
+                          <span style={{ color: '#4ade80', fontWeight: 500 }}>● Exa.ai (Semântica ativa)</span>
+                        ) : (
+                          <span style={{ color: '#fbbf24', fontWeight: 500 }}>⚡ Síntese Direta por IA (Sem chave de busca)</span>
+                        )}
+                      </div>
                     </div>
                   );
                 })()}
@@ -664,7 +712,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ filters, onSelectFavorite, onT
                     className="input-field"
                     style={{ borderColor: (keys.googleAi || serverStatus?.googleAi) ? 'rgba(52, 168, 83, 0.4)' : undefined }}
                     value={keys.googleAi}
-                    onChange={(e) => setKeys({ ...keys, googleAi: e.target.value })}
+                    onChange={(e) => handleKeyChange('googleAi', e.target.value)}
                   />
                   <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px' }}>Gere grátis em aistudio.google.com → Get API Key</span>
                 </div>
@@ -677,23 +725,23 @@ export const Sidebar: React.FC<SidebarProps> = ({ filters, onSelectFavorite, onT
                     className="input-field"
                     style={{ borderColor: (keys.openRouter || serverStatus?.openRouter) ? 'rgba(52, 168, 83, 0.4)' : undefined }}
                     value={keys.openRouter}
-                    onChange={(e) => setKeys({ ...keys, openRouter: e.target.value })}
+                    onChange={(e) => handleKeyChange('openRouter', e.target.value)}
                   />
                 </div>
 
                 <div className="input-group">
                   <label className="input-label">Modelo do OpenRouter</label>
                   <select 
-                    className="input-field"
+                    className="input-field" 
                     value={isCustomModel ? 'custom' : openRouterModel}
                     onChange={(e) => {
                       const val = e.target.value;
                       if (val === 'custom') {
                         setIsCustomModel(true);
-                        setOpenRouterModel('');
+                        handleModelChange('');
                       } else {
                         setIsCustomModel(false);
-                        setOpenRouterModel(val);
+                        handleModelChange(val);
                       }
                     }}
                   >
@@ -713,7 +761,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ filters, onSelectFavorite, onT
                       placeholder="Ex: meta-llama/llama-3.3-70b-instruct" 
                       className="input-field"
                       value={openRouterModel}
-                      onChange={(e) => setOpenRouterModel(e.target.value)}
+                      onChange={(e) => handleModelChange(e.target.value)}
                     />
                   </div>
                 )}
@@ -726,7 +774,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ filters, onSelectFavorite, onT
                     className="input-field"
                     style={{ borderColor: (keys.serper || serverStatus?.serper) ? 'rgba(52, 168, 83, 0.4)' : undefined }}
                     value={keys.serper}
-                    onChange={(e) => setKeys({ ...keys, serper: e.target.value })}
+                    onChange={(e) => handleKeyChange('serper', e.target.value)}
                   />
                 </div>
 
@@ -738,7 +786,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ filters, onSelectFavorite, onT
                     className="input-field"
                     style={{ borderColor: (keys.tavily || serverStatus?.tavily) ? 'rgba(52, 168, 83, 0.4)' : undefined }}
                     value={keys.tavily}
-                    onChange={(e) => setKeys({ ...keys, tavily: e.target.value })}
+                    onChange={(e) => handleKeyChange('tavily', e.target.value)}
                   />
                 </div>
 
@@ -750,7 +798,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ filters, onSelectFavorite, onT
                     className="input-field"
                     style={{ borderColor: (keys.exa || serverStatus?.exa) ? 'rgba(52, 168, 83, 0.4)' : undefined }}
                     value={keys.exa}
-                    onChange={(e) => setKeys({ ...keys, exa: e.target.value })}
+                    onChange={(e) => handleKeyChange('exa', e.target.value)}
                   />
                 </div>
 
@@ -765,7 +813,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ filters, onSelectFavorite, onT
                       className="input-field"
                       style={{ borderColor: (keys.diffbot || serverStatus?.diffbot) ? 'rgba(52, 168, 83, 0.4)' : undefined }}
                       value={keys.diffbot}
-                      onChange={(e) => setKeys({ ...keys, diffbot: e.target.value })}
+                      onChange={(e) => handleKeyChange('diffbot', e.target.value)}
                     />
                   </div>
 
@@ -777,7 +825,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ filters, onSelectFavorite, onT
                       className="input-field"
                       style={{ borderColor: (keys.firecrawl || serverStatus?.firecrawl) ? 'rgba(52, 168, 83, 0.4)' : undefined }}
                       value={keys.firecrawl}
-                      onChange={(e) => setKeys({ ...keys, firecrawl: e.target.value })}
+                      onChange={(e) => handleKeyChange('firecrawl', e.target.value)}
                     />
                   </div>
 
@@ -789,7 +837,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ filters, onSelectFavorite, onT
                       className="input-field"
                       style={{ borderColor: (keys.scrapeDo || serverStatus?.scrapeDo) ? 'rgba(52, 168, 83, 0.4)' : undefined }}
                       value={keys.scrapeDo}
-                      onChange={(e) => setKeys({ ...keys, scrapeDo: e.target.value })}
+                      onChange={(e) => handleKeyChange('scrapeDo', e.target.value)}
                     />
                   </div>
 
@@ -802,7 +850,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ filters, onSelectFavorite, onT
                         className="input-field"
                         style={{ borderColor: (keys.redditClientId || serverStatus?.redditClientId) ? 'rgba(52, 168, 83, 0.4)' : undefined }}
                         value={keys.redditClientId}
-                        onChange={(e) => setKeys({ ...keys, redditClientId: e.target.value })}
+                        onChange={(e) => handleKeyChange('redditClientId', e.target.value)}
                       />
                     </div>
                     <div className="input-group">
@@ -813,7 +861,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ filters, onSelectFavorite, onT
                         className="input-field"
                         style={{ borderColor: (keys.redditClientSecret || serverStatus?.redditClientSecret) ? 'rgba(52, 168, 83, 0.4)' : undefined }}
                         value={keys.redditClientSecret}
-                        onChange={(e) => setKeys({ ...keys, redditClientSecret: e.target.value })}
+                        onChange={(e) => handleKeyChange('redditClientSecret', e.target.value)}
                       />
                     </div>
                   </div>
@@ -830,7 +878,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ filters, onSelectFavorite, onT
                       placeholder="/api (Vercel) ou URL customizada" 
                       className="input-field"
                       value={proxyUrl}
-                      onChange={(e) => setProxyUrlState(e.target.value)}
+                      onChange={(e) => handleProxyChange(e.target.value)}
                     />
                   </div>
                 </div>
