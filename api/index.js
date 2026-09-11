@@ -63,7 +63,16 @@ async function backendFetch(url, options = {}, timeoutMs = 45000) {
     clearTimeout(timeoutId);
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`HTTP error ${response.status}: ${text}`);
+      let errorMsg = text;
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed.error?.message) {
+          errorMsg = parsed.error.message;
+        } else if (parsed.message) {
+          errorMsg = parsed.message;
+        }
+      } catch {}
+      throw new Error(`HTTP error ${response.status}: ${errorMsg}`);
     }
     return response.json();
   } catch (error) {
@@ -286,6 +295,8 @@ async function callLLM({ prompt, messages, keys, model, temperature = 0.3 }) {
     headers: {
       'Authorization': `Bearer ${keys.openRouter}`,
       'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://github.com/fernangcortes/CapIAu-CurIA',
+      'X-Title': 'CapIAu-CurIA',
     },
     body: JSON.stringify(body),
   });
@@ -335,14 +346,23 @@ router.post('/search', async (req, res) => {
   if (!mergedKeys.openRouter && !mergedKeys.googleAi) {
     return res.status(400).json({ error: 'Chave Google AI Studio ou OpenRouter ausente. Pelo menos uma é necessária para sintetizar dados.' });
   }
-  if ((searchApi === 'serper' || searchApi === 'full') && !mergedKeys.serper) {
-    return res.status(400).json({ error: 'Chave API do Serper.dev ausente. Ela é necessária para busca Google/Shopping.' });
-  }
-  if ((searchApi === 'tavily' || searchApi === 'full') && !mergedKeys.tavily) {
-    return res.status(400).json({ error: 'Chave API da Tavily ausente. Ela é necessária para resumos RAG.' });
-  }
-  if ((searchApi === 'exa' || searchApi === 'full') && !mergedKeys.exa) {
-    return res.status(400).json({ error: 'Chave API da Exa.ai ausente. Ela é necessária para busca semântica.' });
+
+  // Verifica disponibilidade de APIs de busca externa
+  const hasSerper = !!mergedKeys.serper;
+  const hasTavily = !!mergedKeys.tavily;
+  const hasExa = !!mergedKeys.exa;
+  const hasAnySearchApi = hasSerper || hasTavily || hasExa;
+
+  // Se a API solicitada não possui chave, seleciona a que tiver chave ou usa síntese direta por IA
+  let effectiveSearchApi = searchApi;
+  if (searchApi === 'serper' && !hasSerper) {
+    effectiveSearchApi = hasTavily ? 'tavily' : hasExa ? 'exa' : 'ai_direct';
+  } else if (searchApi === 'tavily' && !hasTavily) {
+    effectiveSearchApi = hasSerper ? 'serper' : hasExa ? 'exa' : 'ai_direct';
+  } else if (searchApi === 'exa' && !hasExa) {
+    effectiveSearchApi = hasSerper ? 'serper' : hasTavily ? 'tavily' : 'ai_direct';
+  } else if (searchApi === 'full' && !hasAnySearchApi) {
+    effectiveSearchApi = 'ai_direct';
   }
 
   try {
@@ -374,7 +394,7 @@ router.post('/search', async (req, res) => {
     const promises = [];
     
     // 1. Serper.dev Search & Shopping
-    if (searchApi === 'serper' || searchApi === 'full') {
+    if (hasSerper && (effectiveSearchApi === 'serper' || effectiveSearchApi === 'full')) {
       promises.push(
         backendFetch('https://google.serper.dev/search', {
           method: 'POST',
@@ -387,7 +407,7 @@ router.post('/search', async (req, res) => {
           .catch(err => ({ type: 'error', source: 'Serper.dev Web', message: err.message }))
       );
 
-      if (searchApi === 'full' || mode === 'E') {
+      if (effectiveSearchApi === 'full' || mode === 'E') {
         promises.push(
           backendFetch('https://google.serper.dev/shopping', {
             method: 'POST',
@@ -403,7 +423,7 @@ router.post('/search', async (req, res) => {
     }
 
     // 2. Tavily Search
-    if (searchApi === 'tavily' || searchApi === 'full') {
+    if (hasTavily && (effectiveSearchApi === 'tavily' || effectiveSearchApi === 'full')) {
       promises.push(
         backendFetch('https://api.tavily.com/search', {
           method: 'POST',
@@ -422,7 +442,7 @@ router.post('/search', async (req, res) => {
     }
 
     // 3. Exa.ai Search
-    if (searchApi === 'exa' || searchApi === 'full') {
+    if (hasExa && (effectiveSearchApi === 'exa' || effectiveSearchApi === 'full')) {
       promises.push(
         backendFetch('https://api.exa.ai/search', {
           method: 'POST',
@@ -442,20 +462,22 @@ router.post('/search', async (req, res) => {
     }
 
     // 4. Reddit Search
-    const redditPromise = Promise.resolve().then(async () => {
-      let redditContext = '';
-      if (mergedKeys.redditClientId && mergedKeys.redditClientSecret) {
-        try {
-          redditContext = await fetchRedditViaOAuth(query, mergedKeys.redditClientId, mergedKeys.redditClientSecret, registerLink);
-        } catch {
+    if ((mergedKeys.redditClientId && mergedKeys.redditClientSecret) || hasSerper) {
+      const redditPromise = Promise.resolve().then(async () => {
+        let redditContext = '';
+        if (mergedKeys.redditClientId && mergedKeys.redditClientSecret) {
+          try {
+            redditContext = await fetchRedditViaOAuth(query, mergedKeys.redditClientId, mergedKeys.redditClientSecret, registerLink);
+          } catch {
+            redditContext = hasSerper ? await fetchRedditViaSerper(query, mergedKeys.serper, registerLink) : '';
+          }
+        } else if (hasSerper) {
           redditContext = await fetchRedditViaSerper(query, mergedKeys.serper, registerLink);
         }
-      } else {
-        redditContext = await fetchRedditViaSerper(query, mergedKeys.serper, registerLink);
-      }
-      return { type: 'reddit', data: redditContext };
-    });
-    promises.push(redditPromise);
+        return { type: 'reddit', data: redditContext };
+      });
+      promises.push(redditPromise);
+    }
 
     const results = await Promise.all(promises);
     let rawContext = '';
@@ -516,7 +538,11 @@ router.post('/search', async (req, res) => {
     }
 
     if (!rawContext.trim()) {
-      throw new Error('Nenhuma das APIs de busca (Serper/Tavily/Exa/Reddit) retornou dados reais sobre o equipamento. Por favor, verifique suas chaves e a conexão.');
+      rawContext = `[Modo Síntese Direta por IA - Nenhuma API de busca externa configurada (Serper/Tavily/Exa)]
+O usuário não possui chaves de busca web externa ativas no momento.
+Atue como enciclopédia e especialista técnico sênior de hardware audiovisual e tecnologia de produção (2026): utilize seu vasto conhecimento técnico de hardware para detalhar o modelo ou equipamento pesquisado: "${query}".
+Forneça especificações técnicas completas e precisas, estimativas realistas de valores de mercado (em BRL e USD) baseadas nos preços médios praticados, prós, contras, comparativo com concorrentes diretos reais e alertas técnicos.
+Para os links de manuais ou lojas, utilize '#' ou URLs de busca oficiais (ex: "https://www.google.com/search?q=${encodeURIComponent(query)}").`;
     }
 
     let specsRequirements = '';
@@ -528,7 +554,7 @@ router.post('/search', async (req, res) => {
     const prompt = `Você é o consolidador técnico de hardware do ecossistema CapIAu-CurIA (2026).
 O usuário buscou o equipamento: "${query}".
 Modo de busca ativo: "${mode}" (A: Nome, B: Função, C: Lote, E: Preço, F: Troubleshooting, G: Rigs, H: Tendências).
-Mecanismo de busca ativo: "${searchApi}".
+Mecanismo de busca ativo: "${effectiveSearchApi === 'ai_direct' ? 'Síntese Direta por IA (Sem busca web externa)' : effectiveSearchApi}".
 ${specsRequirements}
 
 Consolide os dados brutos da web em um objeto JSON exato de acordo com a tipagem EquipmentData.
@@ -542,7 +568,7 @@ REGRAS DE CONSOLIDAÇÃO (ATENÇÃO MÁXIMA):
 3. "manufacturer": a marca ou fabricante do produto
 4. "category": a categoria de equipamento ideal para o produto (ex: "Computadores", "Câmeras", "Lentes", "Áudio", "Iluminação", "Suporte e Rigging", "Monitores e Transmissores", etc.)
 5. "specs": objeto contendo chaves e valores de especificações técnicas do produto (ex: {"Processador": "...", "Placa de Vídeo": "...", "Memória": "...", "Montagem": "...", "Sensor": "...", "Resolução Máxima": "..."})
-6. "prices": Preencha com as ofertas reais encontradas nos dados coletados.
+6. "prices": Preencha com as ofertas reais encontradas nos dados coletados. Se estiver em modo Síntese Direta por IA (sem busca externa), estime 2 a 3 ofertas realistas em lojas conhecidas (ex: Amazon Brasil, Mercado Livre, B&H Photo) com preços de mercado atualizados para 2026 e link '#'.
    - No campo "link", use EXATAMENTE a string identificadora correspondente (ex: "LINK_1", "LINK_2", etc.). NÃO invente links de forma alguma. Se não houver link correspondente nos dados, use "#".
    - No campo "thumbnail", use EXATAMENTE o identificador correspondente (ex: "THUMB_1", "THUMB_2", etc.) ou string vazia "" se não houver.
    - Adicione "warranty" (ex: "12 meses oficial", "Sem garantia").

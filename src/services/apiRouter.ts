@@ -360,20 +360,8 @@ export async function searchEquipment(
 
   // Verificar chaves no cliente se não houver proxy
   if (!hasProxy) {
-    if (!keys.openRouter) {
-      throw new Error('Chave API do OpenRouter ausente (aba Perfil). Necessária para sintetizar dados.');
-    }
-    if (searchApi === 'serper' && !keys.serper) {
-      throw new Error('Chave API do Serper.dev ausente para busca Google (aba Perfil).');
-    }
-    if (searchApi === 'tavily' && !keys.tavily) {
-      throw new Error('Chave API do Tavily ausente para busca RAG (aba Perfil).');
-    }
-    if (searchApi === 'exa' && !keys.exa) {
-      throw new Error('Chave API do Exa.ai ausente para busca Semântica (aba Perfil).');
-    }
-    if (searchApi === 'full' && (!keys.serper || !keys.tavily || !keys.exa)) {
-      throw new Error('Todas as chaves (Serper, Tavily, Exa) são necessárias para a Pesquisa Completa.');
+    if (!keys.openRouter && !keys.googleAi) {
+      throw new Error('Chave API do Google AI Studio ou OpenRouter ausente (aba Perfil). Pelo menos uma é necessária para sintetizar dados.');
     }
   }
 
@@ -429,7 +417,23 @@ export async function searchEquipment(
 
     let searchResultsText = '';
     
-    if (searchApi === 'serper' || searchApi === 'full') {
+    const hasSerper = !!keys.serper;
+    const hasTavily = !!keys.tavily;
+    const hasExa = !!keys.exa;
+    const hasAnySearchApi = hasSerper || hasTavily || hasExa;
+
+    let effectiveSearchApi = searchApi;
+    if (searchApi === 'serper' && !hasSerper) {
+      effectiveSearchApi = hasTavily ? 'tavily' : hasExa ? 'exa' : 'ai_direct';
+    } else if (searchApi === 'tavily' && !hasTavily) {
+      effectiveSearchApi = hasSerper ? 'serper' : hasExa ? 'exa' : 'ai_direct';
+    } else if (searchApi === 'exa' && !hasExa) {
+      effectiveSearchApi = hasSerper ? 'serper' : hasTavily ? 'tavily' : 'ai_direct';
+    } else if (searchApi === 'full' && !hasAnySearchApi) {
+      effectiveSearchApi = 'ai_direct';
+    }
+
+    if (hasSerper && (effectiveSearchApi === 'serper' || effectiveSearchApi === 'full')) {
       console.log('[Cliente] Consultando Serper.dev...');
       try {
         const serperRes = await fetch('https://google.serper.dev/search', {
@@ -451,7 +455,7 @@ export async function searchEquipment(
       }
     }
 
-    if (searchApi === 'tavily' || searchApi === 'full') {
+    if (hasTavily && (effectiveSearchApi === 'tavily' || effectiveSearchApi === 'full')) {
       console.log('[Cliente] Consultando Tavily...');
       try {
         const tavilyRes = await fetch('https://api.tavily.com/search', {
@@ -477,7 +481,7 @@ export async function searchEquipment(
       }
     }
 
-    if (searchApi === 'exa' || searchApi === 'full') {
+    if (hasExa && (effectiveSearchApi === 'exa' || effectiveSearchApi === 'full')) {
       console.log('[Cliente] Consultando Exa.ai...');
       try {
         const exaRes = await fetch('https://api.exa.ai/search', {
@@ -505,7 +509,10 @@ export async function searchEquipment(
     }
 
     if (!searchResultsText.trim()) {
-      throw new Error('Nenhuma das APIs de busca (Serper/Tavily/Exa) retornou dados reais sobre o equipamento. Por favor, verifique suas chaves e a conexão.');
+      searchResultsText = `[Modo Síntese Direta por IA - Nenhuma API de busca web externa (Serper/Tavily/Exa) configurada]
+O usuário não configurou chaves de busca externa.
+Utilize seu amplo conhecimento técnico de hardware audiovisual e tecnologia de 2026 para gerar o dossiê completo, especificações técnicas detalhadas, estimativas de preços de mercado brasileiro (BRL) e global (USD), prós, contras e concorrentes para: "${cleanQuery}".
+Para links de manuais ou lojas, utilize '#' ou URLs de busca genéricas.`;
     }
 
     let specsRequirements = '';
@@ -514,10 +521,9 @@ export async function searchEquipment(
         Object.entries(minSpecs).map(([k, v]) => `- ${k}: ${v}`).join('\n') + `\nFiltre ou avalie os resultados de busca e garanta que os modelos de concorrentes ou especificações técnicas atendam ou sejam altamente compatíveis com essas exigências.\n\n`;
     }
 
-    // Processamento do OpenRouter se chave estiver presente
-    console.log('[Cliente] Chamando OpenRouter para consolidar os resultados das buscas...');
     const prompt = `Consolide as informações de busca técnica sobre o equipamento "${cleanQuery}" em um formato JSON estruturado exato de acordo com as especificações de 2026.
 Lógica do Modo de busca ativo: ${mode}.
+Mecanismo de busca ativo: ${effectiveSearchApi === 'ai_direct' ? 'Síntese Direta por IA (Sem busca web externa)' : effectiveSearchApi}.
 ${specsRequirements}
 Fontes de busca cruas:
 ${searchResultsText}
@@ -599,28 +605,58 @@ Gere EXATAMENTE um objeto JSON que obedeça a este formato, sem markdown, crases
 
 REGRAS CRÍTICAS DE CONTEÚDO:
 - "similars" e "comparisons" devem obrigatoriamente se referir a EQUIPAMENTOS alternativos e marcas concorrentes REAIS. NUNCA coloque manuais, softwares, lentes avulsas (se o item for câmera) ou acessórios nessas listas.
-- Não crie links fictícios de forma alguma. Use apenas os placeholders LINK_X fornecidos nas fontes cruas.`;
+- Não crie links fictícios de forma alguma. Use apenas os placeholders LINK_X fornecidos nas fontes cruas ou '#' se não houver.`;
 
-    const openRouterRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${keys.openRouter}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3
-      }),
-    });
+    let aiText = '';
+    if (shouldUseGoogleAI(keys, model)) {
+      console.log('[Cliente] 🚀 Chamando Google AI Studio diretamente...');
+      const googleModel = toGoogleModelName(model).replace(':free', '');
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${googleModel}:generateContent?key=${keys.googleAi}`;
+      const googleRes = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.3, maxOutputTokens: 8192 }
+        })
+      });
+      if (!googleRes.ok) {
+        const text = await googleRes.text();
+        throw new Error(`Erro no Google AI Studio status ${googleRes.status}: ${text}`);
+      }
+      const gJson = await googleRes.json();
+      aiText = gJson.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    } else {
+      console.log('[Cliente] Chamando OpenRouter para consolidar os resultados das buscas...');
+      const openRouterRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${keys.openRouter}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://github.com/fernangcortes/CapIAu-CurIA',
+          'X-Title': 'CapIAu-CurIA',
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.3
+        }),
+      });
 
-    if (!openRouterRes.ok) {
-      throw new Error(`Erro no OpenRouter status ${openRouterRes.status}`);
+      if (!openRouterRes.ok) {
+        const text = await openRouterRes.text();
+        let errorMsg = text;
+        try {
+          const parsed = JSON.parse(text);
+          if (parsed.error?.message) errorMsg = parsed.error.message;
+        } catch {}
+        throw new Error(`Erro no OpenRouter status ${openRouterRes.status}: ${errorMsg}`);
+      }
+
+      const aiJson = await openRouterRes.json();
+      aiText = aiJson.choices?.[0]?.message?.content || '';
     }
 
-    const aiJson = await openRouterRes.json();
-    const aiText = aiJson.choices?.[0]?.message?.content || '';
-    
     const jsonMatch = aiText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       throw new Error('Não foi possível obter um JSON estruturado da IA.');
